@@ -1,0 +1,969 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>将棋盤面画像アナライザー</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    /* 将棋盤用スタイリング */
+    .shogi-grid {
+      display: grid;
+      grid-template-columns: repeat(9, minmax(0, 1fr));
+      grid-template-rows: repeat(9, minmax(0, 1fr));
+      aspect-ratio: 9 / 10;
+    }
+    /* 駒文字の向き反転（後手用） */
+    .rotate-180-piece {
+      transform: rotate(180deg);
+    }
+    /* 選択中マスのハイライト */
+    .selected-cell {
+      background-color: rgba(59, 130, 246, 0.45) !important;
+      outline: 3px solid #2563eb;
+      outline-offset: -3px;
+    }
+    /* 駒台の選択可能・ドロップハイライト */
+    .hand-area-active {
+      background-color: rgba(254, 240, 138, 0.9) !important;
+      border-color: #d97706 !important;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body class="bg-amber-50 min-h-screen text-slate-800 font-sans pb-12">
+
+  <!-- ヘッダー -->
+  <header class="bg-amber-800 text-amber-50 shadow-md p-4 mb-6">
+    <div class="max-w-6xl mx-auto flex justify-between items-center">
+      <div class="flex items-center gap-3">
+        <i data-lucide="camera" class="w-7 h-7"></i>
+        <h1 class="text-xl md:text-2xl font-bold tracking-wide">将棋盤面 AI アナライザー</h1>
+      </div>
+      <div class="flex items-center gap-2">
+        <button onclick="openKeyModal()" class="text-xs bg-amber-900 hover:bg-amber-950 text-amber-200 px-3 py-1.5 rounded-lg border border-amber-700 flex items-center gap-1">
+          <i data-lucide="key" class="w-3.5 h-3.5"></i> 設定 (API Key / モデル)
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- メインコンテンツ -->
+  <main class="max-w-6xl mx-auto px-4">
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+      
+      <!-- 左側：画像アップロード & プレビュー -->
+      <section class="lg:col-span-5 flex flex-col gap-4">
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-amber-200">
+          <h2 class="text-lg font-bold mb-3 flex items-center gap-2 text-amber-900">
+            <i data-lucide="upload" class="w-5 h-5"></i> 1. 画像を選択・撮影
+          </h2>
+          
+          <label class="border-2 border-dashed border-amber-300 hover:border-amber-500 bg-amber-50/50 hover:bg-amber-50 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all min-h-[200px]">
+            <input type="file" id="imageInput" accept="image/*" class="hidden" onchange="handleImageSelect(event)">
+            <i data-lucide="image-plus" class="w-12 h-12 text-amber-600 mb-2"></i>
+            <span class="font-medium text-amber-900">画像をドラッグ＆ドロップ</span>
+            <span class="text-xs text-amber-600 mt-1">またはクリックしてファイル選択</span>
+            <span class="text-[10px] text-slate-400 mt-3">※アプリのスクショ、対局写真など（ひよこ等の背景は自動無視されます）</span>
+          </label>
+
+          <!-- プレビュー表示エリア -->
+          <div id="previewContainer" class="mt-4 hidden">
+            <p class="text-xs font-semibold text-slate-500 mb-2">アップロード画像:</p>
+            <div class="relative rounded-lg overflow-hidden border border-slate-200 max-h-[300px] flex justify-center bg-black/5">
+              <img id="imagePreview" src="" alt="盤面プレビュー" class="object-contain max-h-[300px] w-auto">
+            </div>
+          </div>
+
+          <!-- 解析実行ボタン -->
+          <button id="analyzeBtn" onclick="analyzeBoardImage()" disabled 
+            class="w-full mt-4 bg-amber-600 hover:bg-amber-700 disabled:bg-slate-300 text-white font-bold py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-2">
+            <i data-lucide="sparkles" class="w-5 h-5"></i>
+            <span>AIで盤面を解析・自動生成</span>
+          </button>
+        </div>
+
+        <!-- 使い方ヒント -->
+        <div class="bg-amber-100/60 p-4 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-2">
+          <p class="font-bold flex items-center gap-1">
+            <i data-lucide="mouse-pointer-click" class="w-4 h-4"></i> 盤面操作のショートカット
+          </p>
+          <ul class="list-disc list-inside space-y-1 text-slate-700">
+            <li><b>1回タップ:</b> 駒を選択 ➔ 別のマスをタップで移動</li>
+            <li><b>連続タップ:</b> その場の駒の状態を「自分の生駒 ➔ 自分の成駒 ➔ 相手の生駒 ➔ 相手の成駒」へ切替</li>
+            <li><b>駒台へ移動:</b> 盤上の駒を選択した状態で駒台エリアをタップすると駒台へ移動</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- 右側：盤面表示 & 局面データ -->
+      <section class="lg:col-span-7 flex flex-col gap-4">
+        
+        <!-- エディタヘッダー / 操作ツール -->
+        <div class="bg-white p-5 rounded-2xl shadow-sm border border-amber-200">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h2 class="text-lg font-bold flex items-center gap-2 text-amber-900">
+              <i data-lucide="grid" class="w-5 h-5"></i> 2. 解析・対局盤面
+            </h2>
+            <div class="flex items-center gap-2">
+              <button onclick="resetBoard()" class="text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium px-3 py-1.5 rounded-lg border flex items-center gap-1">
+                <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> 平手初期配置
+              </button>
+              <button onclick="clearBoard()" class="text-xs bg-red-50 hover:bg-red-100 text-red-600 font-medium px-3 py-1.5 rounded-lg border border-red-200 flex items-center gap-1">
+                <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> 全消去
+              </button>
+            </div>
+          </div>
+
+          <!-- 将棋盤ビュー -->
+          <div class="flex justify-center my-2">
+            <div class="w-full max-w-[420px] bg-amber-200 border-4 border-amber-900 rounded-lg p-2 shadow-inner select-none">
+              
+              <!-- 後手の持ち駒 -->
+              <div id="goteHandBox" onclick="onHandAreaClick(1)" class="bg-amber-100/80 rounded border border-amber-400 p-2 mb-2 flex items-center justify-between transition-all">
+                <div class="text-xs font-bold text-amber-900 flex items-center gap-1">
+                  <span>☖ 後手 持ち駒:</span>
+                </div>
+                <div id="goteHand" class="flex flex-wrap gap-1 text-sm font-bold min-h-[28px] items-center">
+                  <!-- 後手持ち駒 -->
+                </div>
+              </div>
+
+              <!-- 筋（1〜9）ラベル -->
+              <div class="grid grid-cols-9 text-center text-xs font-bold text-amber-900 mb-1">
+                <span>9</span><span>8</span><span>7</span><span>6</span><span>5</span><span>4</span><span>3</span><span>2</span><span>1</span>
+              </div>
+
+              <!-- 盤面 (9x9) -->
+              <div class="relative">
+                <div id="shogiBoard" class="shogi-grid bg-amber-300 border-2 border-amber-900 rounded overflow-hidden">
+                  <!-- 81マス動的生成 -->
+                </div>
+              </div>
+
+              <!-- 先手の持ち駒 -->
+              <div id="senteHandBox" onclick="onHandAreaClick(0)" class="bg-amber-100/80 rounded border border-amber-400 p-2 mt-2 flex items-center justify-between transition-all">
+                <div class="text-xs font-bold text-amber-900 flex items-center gap-1">
+                  <span>☗ 先手 持ち駒:</span>
+                </div>
+                <div id="senteHand" class="flex flex-wrap gap-1 text-sm font-bold min-h-[28px] items-center">
+                  <!-- 先手持ち駒 -->
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <!-- エクスポート / 局面データ操作 -->
+          <div class="mt-6 border-t border-amber-100 pt-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <label class="text-xs font-bold text-slate-600">SFEN形式 (局面データ):</label>
+              <button onclick="copySFEN()" class="text-xs bg-amber-100 hover:bg-amber-200 text-amber-900 px-2.5 py-1 rounded border border-amber-300 font-medium flex items-center gap-1">
+                <i data-lucide="copy" class="w-3.5 h-3.5"></i> SFENコピー
+              </button>
+            </div>
+            <input type="text" id="sfenOutput" readonly class="w-full bg-slate-50 border border-slate-300 rounded-lg p-2 text-xs font-mono text-slate-700">
+
+            <div class="pt-2 flex gap-2">
+              <button onclick="downloadBoardImage()" class="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-2.5 px-4 rounded-xl shadow transition-all flex items-center justify-center gap-2 text-sm">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                <span>局面図画像（PNG）を保存</span>
+              </button>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+    </div>
+  </main>
+
+  <!-- API Key & モデル設定モーダル -->
+  <div id="keyModal" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center z-50 p-4">
+    <div class="bg-white p-6 rounded-2xl shadow-xl max-w-md w-full text-slate-800">
+      <h3 class="font-bold text-lg text-amber-900 mb-2 flex items-center gap-2">
+        <i data-lucide="settings" class="w-5 h-5"></i> API Key & モデル設定
+      </h3>
+      
+      <div class="space-y-4 my-4">
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Gemini API Key:</label>
+          <input type="password" id="customApiKeyInput" placeholder="AQ.Ab8RN... や AIzaSy..." class="w-full border border-slate-300 rounded-lg p-2.5 text-sm font-mono focus:ring-2 focus:ring-amber-500 outline-none">
+          <p class="text-[10px] text-slate-500 mt-1">※Google AI Studioで取得したAPIキーを入力してください。</p>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">使用モデル選択:</label>
+          <select id="modelSelectInput" class="w-full border border-slate-300 rounded-lg p-2.5 text-sm bg-white focus:ring-2 focus:ring-amber-500 outline-none">
+            <option value="gemini-2.5-flash">gemini-2.5-flash (推奨・標準)</option>
+            <option value="gemini-1.5-flash">gemini-1.5-flash (軽量版)</option>
+            <option value="gemini-2.5-flash-preview-09-2025">gemini-2.5-flash-preview-09-2025 (プレビュー版)</option>
+          </select>
+          <p class="text-[10px] text-slate-500 mt-1">※もしエラーが出る場合は「gemini-1.5-flash」等に変更してみてください。</p>
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-2">
+        <button onclick="closeKeyModal()" class="px-4 py-2 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-lg">キャンセル</button>
+        <button onclick="saveSettings()" class="px-4 py-2 text-xs bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ローディングオーバーレイ -->
+  <div id="loadingOverlay" class="fixed inset-0 bg-slate-900/60 backdrop-blur-sm hidden flex-col items-center justify-center z-50 text-white">
+    <div class="bg-white p-6 rounded-2xl shadow-xl flex flex-col items-center gap-4 text-slate-800 max-w-sm w-full mx-4">
+      <div class="w-12 h-12 border-4 border-amber-600 border-t-transparent rounded-full animate-spin"></div>
+      <div class="text-center">
+        <h3 class="font-bold text-lg text-amber-900">AIが盤面を解析中...</h3>
+        <p class="text-xs text-slate-500 mt-1">画面上のひよこやGUIを除外し、9×9の将棋盤を抽出しています。</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- カスタム通知トースト -->
+  <div id="toast" class="fixed bottom-5 right-5 bg-slate-800 text-white px-4 py-3 rounded-xl shadow-lg transition-all transform translate-y-20 opacity-0 flex items-center gap-2 text-sm z-50">
+    <i data-lucide="info" id="toastIcon" class="w-5 h-5 text-amber-400"></i>
+    <span id="toastMsg">通知メッセージ</span>
+  </div>
+
+  <script>
+    const apiKey = "";
+    let userApiKey = "";
+    let selectedModel = "gemini-2.5-flash";
+
+    function getEffectiveApiKey() {
+      if (userApiKey && userApiKey.trim() !== "") return userApiKey;
+      if (apiKey && apiKey.trim() !== "") return apiKey;
+      return "";
+    }
+
+    function openKeyModal() {
+      document.getElementById('customApiKeyInput').value = userApiKey;
+      document.getElementById('modelSelectInput').value = selectedModel;
+      document.getElementById('keyModal').classList.remove('hidden');
+    }
+
+    function closeKeyModal() {
+      document.getElementById('keyModal').classList.add('hidden');
+    }
+
+    function saveSettings() {
+      userApiKey = document.getElementById('customApiKeyInput').value.trim();
+      selectedModel = document.getElementById('modelSelectInput').value;
+      closeKeyModal();
+      showToast("設定を更新しました");
+    }
+    
+    let selectedImageBase64 = null;
+    let selectedImageMimeType = "image/png";
+
+    // 移動・選択状態管理変数
+    let selectedSquare = null; // { type: 'board', row, col } または { type: 'hand', piece, owner }
+
+    // 成りマップ
+    const PROMOTE_MAP = {
+      'FU': 'TO', 'KY': 'NY', 'KE': 'NK', 'GI': 'NG', 'KA': 'UM', 'HI': 'RY'
+    };
+
+    // 原型駒マップ
+    const DEMOTE_MAP = {
+      'TO': 'FU', 'NY': 'KY', 'NK': 'KE', 'NG': 'GI', 'UM': 'KA', 'RY': 'HI',
+      'FU': 'FU', 'KY': 'KY', 'KE': 'KE', 'GI': 'GI', 'KI': 'KI', 'KA': 'KA', 'HI': 'HI', 'OU': 'OU'
+    };
+
+    // 各駒の上限規定数
+    const PIECE_MAX_LIMITS = {
+      'FU': 18, 'KY': 4, 'KE': 4, 'GI': 4, 'KI': 4, 'KA': 2, 'HI': 2, 'OU': 2
+    };
+
+    const BASE_PIECE_MAP = {
+      'FU': 'FU', 'TO': 'FU',
+      'KY': 'KY', 'NY': 'KY',
+      'KE': 'KE', 'NK': 'KE',
+      'GI': 'GI', 'NG': 'GI',
+      'KI': 'KI',
+      'KA': 'KA', 'UM': 'KA',
+      'HI': 'HI', 'RY': 'HI',
+      'OU': 'OU'
+    };
+
+    const PIECE_TYPES = {
+      '': { name: '空', sfen: '' },
+      'FU': { name: '歩', sfen: 'P' },
+      'KY': { name: '香', sfen: 'L' },
+      'KE': { name: '桂', sfen: 'N' },
+      'GI': { name: '銀', sfen: 'S' },
+      'KI': { name: '金', sfen: 'G' },
+      'KA': { name: '角', sfen: 'B' },
+      'HI': { name: '飛', sfen: 'R' },
+      'OU': { name: '玉', sfen: 'K' },
+      'TO': { name: 'と', sfen: '+P' },
+      'NY': { name: '成香', sfen: '+L' },
+      'NK': { name: '成桂', sfen: '+N' },
+      'NG': { name: '成銀', sfen: '+S' },
+      'UM': { name: '馬', sfen: '+B' },
+      'RY': { name: '龍', sfen: '+R' },
+    };
+
+    let boardState = Array(9).fill(null).map(() => Array(9).fill(null));
+    let senteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+    let goteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+
+    const PIECE_KANJI = {
+      'FU': '歩', 'KY': '香', 'KE': '桂', 'GI': '銀', 'KI': '金', 'KA': '角', 'HI': '飛', 'OU': '玉',
+      'TO': 'と', 'NY': '杏', 'NK': '圭', 'NG': '全', 'UM': '馬', 'RY': '龍'
+    };
+
+    window.onload = function() {
+      lucide.createIcons();
+      resetBoard();
+    };
+
+    function countCurrentPieces() {
+      const counts = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0, OU:0 };
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const piece = boardState[r][c];
+          if (piece && piece.type) {
+            const base = BASE_PIECE_MAP[piece.type];
+            if (base) counts[base] = (counts[base] || 0) + 1;
+          }
+        }
+      }
+
+      for (const [p, num] of Object.entries(senteHand)) {
+        const base = BASE_PIECE_MAP[p];
+        if (base) counts[base] = (counts[base] || 0) + num;
+      }
+
+      for (const [p, num] of Object.entries(goteHand)) {
+        const base = BASE_PIECE_MAP[p];
+        if (base) counts[base] = (counts[base] || 0) + num;
+      }
+
+      return counts;
+    }
+
+    // 平手初期配置
+    function resetBoard() {
+      selectedSquare = null;
+      boardState = [
+        [{type:'KY', owner:1},{type:'KE', owner:1},{type:'GI', owner:1},{type:'KI', owner:1},{type:'OU', owner:1},{type:'KI', owner:1},{type:'GI', owner:1},{type:'KE', owner:1},{type:'KY', owner:1}],
+        [null,{type:'HI', owner:1},null,null,null,null,null,{type:'KA', owner:1},null],
+        [{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1},{type:'FU', owner:1}],
+        [null,null,null,null,null,null,null,null,null],
+        [null,null,null,null,null,null,null,null,null],
+        [null,null,null,null,null,null,null,null,null],
+        [{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0},{type:'FU', owner:0}],
+        [null,{type:'KA', owner:0},null,null,null,null,null,{type:'HI', owner:0},null],
+        [{type:'KY', owner:0},{type:'KE', owner:0},{type:'GI', owner:0},{type:'KI', owner:0},{type:'OU', owner:0},{type:'KI', owner:0},{type:'GI', owner:0},{type:'KE', owner:0},{type:'KY', owner:0}]
+      ];
+      senteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+      goteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+      renderBoard();
+    }
+
+    function clearBoard() {
+      selectedSquare = null;
+      boardState = Array(9).fill(null).map(() => Array(9).fill(null));
+      senteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+      goteHand = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0 };
+      renderBoard();
+    }
+
+    function renderBoard() {
+      const boardEl = document.getElementById('shogiBoard');
+      boardEl.innerHTML = '';
+
+      for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+          const cell = document.createElement('div');
+          
+          let isSelected = selectedSquare && selectedSquare.type === 'board' && selectedSquare.row === row && selectedSquare.col === col;
+          
+          cell.className = `border border-amber-900/40 flex items-center justify-center cursor-pointer select-none relative transition-all ${
+            isSelected ? 'selected-cell' : 'hover:bg-amber-100/50'
+          }`;
+          
+          const piece = boardState[row][col];
+          if (piece) {
+            const pieceText = document.createElement('span');
+            pieceText.className = `font-bold text-lg md:text-xl leading-none ${
+              piece.owner === 1 ? 'rotate-180-piece text-slate-900' : 'text-amber-950'
+            }`;
+            pieceText.innerText = PIECE_KANJI[piece.type] || piece.type;
+            cell.appendChild(pieceText);
+          }
+
+          cell.onclick = (e) => {
+            e.stopPropagation();
+            onCellClick(row, col);
+          };
+          boardEl.appendChild(cell);
+        }
+      }
+
+      renderHands();
+      updateSFEN();
+    }
+
+    function renderHands() {
+      const senteEl = document.getElementById('senteHand');
+      const goteEl = document.getElementById('goteHand');
+      
+      senteEl.innerHTML = renderHandPieces(senteHand, 0);
+      goteEl.innerHTML = renderHandPieces(goteHand, 1);
+
+      // 駒台ハイライト（盤上駒選択時の視覚的フィードバック）
+      const senteBox = document.getElementById('senteHandBox');
+      const goteBox = document.getElementById('goteHandBox');
+
+      if (selectedSquare && selectedSquare.type === 'board') {
+        senteBox.classList.add('hand-area-active');
+        goteBox.classList.add('hand-area-active');
+      } else {
+        senteBox.classList.remove('hand-area-active');
+        goteBox.classList.remove('hand-area-active');
+      }
+    }
+
+    function renderHandPieces(handObj, owner) {
+      let html = '';
+      for (const [p, count] of Object.entries(handObj)) {
+        if (count > 0) {
+          const isSelected = selectedSquare && selectedSquare.type === 'hand' && selectedSquare.piece === p && selectedSquare.owner === owner;
+          
+          html += `<span onclick="onHandPieceClick(event, '${p}', ${owner})" class="cursor-pointer border px-1.5 py-0.5 rounded flex items-center gap-0.5 transition-all ${
+            isSelected ? 'bg-blue-200 border-blue-600 ring-2 ring-blue-500 font-black' : 'bg-amber-200 hover:bg-amber-300 border-amber-400 text-amber-950'
+          }">
+            ${PIECE_KANJI[p]}${count > 1 ? `<span class="text-xs text-amber-800 font-normal">×${count}</span>` : ''}
+          </span>`;
+        }
+      }
+      if (!html) html = '<span class="text-xs text-slate-400 italic">なし</span>';
+      
+      html += `<button onclick="addHandPrompt(event, ${owner})" class="ml-1 text-xs bg-amber-300/60 hover:bg-amber-300 text-amber-900 px-1.5 py-0.5 rounded border border-amber-400 font-bold">+ 追加</button>`;
+      return html;
+    }
+
+    // 持ち駒個々のタップ
+    function onHandPieceClick(e, piece, owner) {
+      e.stopPropagation();
+      if (selectedSquare && selectedSquare.type === 'hand' && selectedSquare.piece === piece && selectedSquare.owner === owner) {
+        selectedSquare = null;
+      } else {
+        selectedSquare = { type: 'hand', piece, owner };
+      }
+      renderBoard();
+    }
+
+    // 駒台全体タップ（盤上駒のドロップ受け皿）
+    function onHandAreaClick(targetOwner) {
+      if (selectedSquare && selectedSquare.type === 'board') {
+        const { row, col } = selectedSquare;
+        const pieceOnBoard = boardState[row][col];
+
+        if (pieceOnBoard) {
+          const basePiece = DEMOTE_MAP[pieceOnBoard.type] || pieceOnBoard.type;
+          
+          // 玉（王）は持ち駒にできないため除外
+          if (basePiece === 'OU') {
+            showToast("玉は持ち駒へ移動できません", true);
+            return;
+          }
+
+          const targetHand = targetOwner === 0 ? senteHand : goteHand;
+          targetHand[basePiece] = (targetHand[basePiece] || 0) + 1;
+
+          boardState[row][col] = null;
+          selectedSquare = null;
+          renderBoard();
+          showToast(`駒を${targetOwner === 0 ? '先手' : '後手'}の持ち駒へ移動しました`);
+        }
+      }
+    }
+
+    function addHandPrompt(e, owner) {
+      e.stopPropagation();
+      const piece = prompt("追加する持ち駒を入力してください (歩, 香, 桂, 銀, 金, 角, 飛):");
+      if (!piece) return;
+      const keyMap = {'歩':'FU','香':'KY','桂':'KE','銀':'GI','金':'KI','角':'KA','飛':'HI'};
+      const key = keyMap[piece.trim()];
+      if (key) {
+        const hand = owner === 0 ? senteHand : goteHand;
+        hand[key] = (hand[key] || 0) + 1;
+        renderBoard();
+      } else {
+        showToast("無効な駒名です", true);
+      }
+    }
+
+    // マス目タップ操作（選択 / 移動 / その場タップでの状態切替サイクル）
+    function onCellClick(row, col) {
+      const clickedPiece = boardState[row][col];
+
+      // 1. すでにマス目上の駒が選択されている場合
+      if (selectedSquare && selectedSquare.type === 'board') {
+        const fromRow = selectedSquare.row;
+        const fromCol = selectedSquare.col;
+
+        // 【同じマスを再度タップ（2回目タップ）した場合】
+        // 状態をローテーション切替（自分生駒 ➔ 自分成駒 ➔ 相手生駒 ➔ 相手成駒）
+        if (fromRow === row && fromCol === col) {
+          cyclePieceState(row, col);
+          renderBoard();
+          return;
+        }
+
+        const movingPiece = boardState[fromRow][fromCol];
+
+        // 移動先に自分の駒がある場合は選択先を変更
+        if (clickedPiece && clickedPiece.owner === movingPiece.owner) {
+          selectedSquare = { type: 'board', row, col };
+          renderBoard();
+          return;
+        }
+
+        // 移動実行（相手の駒を取る場合は成りを戻して持ち駒へ）
+        if (clickedPiece) {
+          const capturedBaseType = DEMOTE_MAP[clickedPiece.type] || clickedPiece.type;
+          if (capturedBaseType !== 'OU') {
+            const capturerHand = movingPiece.owner === 0 ? senteHand : goteHand;
+            capturerHand[capturedBaseType] = (capturerHand[capturedBaseType] || 0) + 1;
+          }
+        }
+
+        boardState[row][col] = movingPiece;
+        boardState[fromRow][fromCol] = null;
+        selectedSquare = null;
+        renderBoard();
+        return;
+
+      } else if (selectedSquare && selectedSquare.type === 'hand') {
+        // 2. 持ち駒が選択されている場合（打つ処理）
+        if (clickedPiece) {
+          showToast("駒があるマスには打てません", true);
+          return;
+        }
+
+        const { piece, owner } = selectedSquare;
+        boardState[row][col] = { type: piece, owner };
+
+        const hand = owner === 0 ? senteHand : goteHand;
+        hand[piece] = Math.max(0, hand[piece] - 1);
+
+        selectedSquare = null;
+        renderBoard();
+        return;
+      }
+
+      // 3. まだ何も選択されていない場合
+      if (clickedPiece) {
+        selectedSquare = { type: 'board', row, col };
+      }
+      renderBoard();
+    }
+
+    // 駒の状態ローテーション切り替え処理
+    // 生駒(自分) ➔ 成駒(自分) ➔ 生駒(相手) ➔ 成駒(相手)
+    function cyclePieceState(row, col) {
+      const piece = boardState[row][col];
+      if (!piece) return;
+
+      const baseType = DEMOTE_MAP[piece.type] || piece.type;
+      const promotedType = PROMOTE_MAP[baseType];
+      const hasPromoted = !!promotedType;
+
+      const owner = piece.owner; // 0: 先手, 1: 後手
+      const isPromoted = piece.type !== baseType;
+
+      if (owner === 0) {
+        if (!isPromoted && hasPromoted) {
+          // 先手生駒 ➔ 先手成駒
+          boardState[row][col] = { type: promotedType, owner: 0 };
+        } else {
+          // 先手成駒 (または成れない先手生駒) ➔ 後手生駒
+          boardState[row][col] = { type: baseType, owner: 1 };
+        }
+      } else {
+        if (!isPromoted && hasPromoted) {
+          // 後手生駒 ➔ 後手成駒
+          boardState[row][col] = { type: promotedType, owner: 1 };
+        } else {
+          // 後手成駒 (または成れない後手生駒) ➔ 先手生駒
+          boardState[row][col] = { type: baseType, owner: 0 };
+        }
+      }
+    }
+
+    function updateSFEN() {
+      let sfenRows = [];
+      for (let row = 0; row < 9; row++) {
+        let rowStr = '';
+        let emptyCount = 0;
+        for (let col = 0; col < 9; col++) {
+          const piece = boardState[row][col];
+          if (!piece) {
+            emptyCount++;
+          } else {
+            if (emptyCount > 0) {
+              rowStr += emptyCount;
+              emptyCount = 0;
+            }
+            let char = PIECE_TYPES[piece.type] ? PIECE_TYPES[piece.type].sfen : '';
+            if (piece.owner === 1) {
+              char = char.toLowerCase();
+            }
+            rowStr += char;
+          }
+        }
+        if (emptyCount > 0) rowStr += emptyCount;
+        sfenRows.push(rowStr);
+      }
+
+      let handStr = '';
+      const handOrder = ['HI', 'KA', 'KI', 'GI', 'KE', 'KY', 'FU'];
+      
+      handOrder.forEach(p => {
+        const count = senteHand[p];
+        if (count > 0) {
+          handStr += (count > 1 ? count : '') + PIECE_TYPES[p].sfen;
+        }
+      });
+      handOrder.forEach(p => {
+        const count = goteHand[p];
+        if (count > 0) {
+          handStr += (count > 1 ? count : '') + PIECE_TYPES[p].sfen.toLowerCase();
+        }
+      });
+
+      if (!handStr) handStr = '-';
+
+      const sfen = `${sfenRows.join('/')} b ${handStr} 1`;
+      document.getElementById('sfenOutput').value = sfen;
+    }
+
+    function copySFEN() {
+      const sfenInput = document.getElementById('sfenOutput');
+      sfenInput.select();
+      document.execCommand('copy');
+      showToast('SFEN文字列をコピーしました');
+    }
+
+    function handleImageSelect(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      selectedImageMimeType = file.type || "image/png";
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        const dataUrl = e.target.result;
+        selectedImageBase64 = dataUrl.split(',')[1];
+        document.getElementById('imagePreview').src = dataUrl;
+        document.getElementById('previewContainer').classList.remove('hidden');
+        document.getElementById('analyzeBtn').disabled = false;
+      };
+      reader.readAsDataURL(file);
+    }
+
+    async function callGeminiApiWithRetry(payload, maxRetries = 5) {
+      const activeKey = getEffectiveApiKey();
+      if (!activeKey) {
+        openKeyModal();
+        throw new Error("APIキーが設定されていません。右上の「設定」からキーを入力してください。");
+      }
+
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${selectedModel}:generateContent?key=${activeKey}`;
+      let delay = 1000;
+      let lastErrorMessage = "";
+
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+
+          if (response.ok) {
+            return await response.json();
+          } else {
+            const errJson = await response.json().catch(() => ({}));
+            lastErrorMessage = errJson.error?.message || `HTTPエラー ${response.status}`;
+            if (response.status === 400 || response.status === 403 || response.status === 404) {
+              break;
+            }
+          }
+        } catch (e) {
+          lastErrorMessage = e.message || "ネットワークエラー";
+        }
+        await new Promise(res => setTimeout(res, delay));
+        delay *= 2;
+      }
+      throw new Error(lastErrorMessage || "API呼び出しに失敗しました。");
+    }
+
+    async function analyzeBoardImage() {
+      if (!selectedImageBase64) return;
+
+      const overlay = document.getElementById('loadingOverlay');
+      overlay.classList.remove('hidden');
+      overlay.classList.add('flex');
+
+      const promptText = `
+この画像から将棋の盤面を解析し、純粋なJSONオブジェクトのみを出力してください。
+画像内にひよこキャラ、アバター、GUIボタン、対局ステータス表示などが含まれている場合は、それらを完全に無視し、中央の9x9の将棋盤と持ち駒領域のみを読み取ってください。
+
+【出力フォーマット】
+{
+  "board": [
+    // 1段目(9一〜1一)の9要素
+    [{"type": "KY", "owner": 1}, null, ...],
+    ...
+    // 9段目(9九〜1九)の9要素
+  ],
+  "senteHand": { "FU": 0, "KY": 0, "KE": 0, "GI": 0, "KI": 0, "KA": 0, "HI": 0 },
+  "goteHand": { "FU": 0, "KY": 0, "KE": 0, "GI": 0, "KI": 0, "KA": 0, "HI": 0 }
+}
+
+【駒種類(type)】: FU, KY, KE, GI, KI, KA, HI, OU, TO, NY, NK, NG, UM, RY または 空きマスは null
+【所有者(owner)】: 先手/手前=0, 後手/奥側=1
+`;
+
+      const payload = {
+        contents: [
+          {
+            parts: [
+              { text: promptText },
+              {
+                inlineData: {
+                  mimeType: selectedImageMimeType,
+                  data: selectedImageBase64
+                }
+              }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      };
+
+      try {
+        const result = await callGeminiApiWithRetry(payload);
+        const textResult = result.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (textResult) {
+          const cleanJsonStr = textResult.replace(/```json/g, '').replace(/```/g, '').trim();
+          const parsedData = JSON.parse(cleanJsonStr);
+          
+          if (parsedData.board && Array.isArray(parsedData.board)) {
+            boardState = parsedData.board;
+          }
+          if (parsedData.senteHand) senteHand = { ...senteHand, ...parsedData.senteHand };
+          if (parsedData.goteHand) goteHand = { ...goteHand, ...parsedData.goteHand };
+
+          validateAndSanitizeBoardCounts();
+
+          selectedSquare = null;
+          renderBoard();
+          showToast("盤面の解析が完了しました！");
+        } else {
+          showToast("解析結果を取得できませんでした。", true);
+        }
+      } catch (err) {
+        showToast("解析エラー: " + err.message, true);
+      } finally {
+        overlay.classList.add('hidden');
+        overlay.classList.remove('flex');
+      }
+    }
+
+    function validateAndSanitizeBoardCounts() {
+      const counts = { FU:0, KY:0, KE:0, GI:0, KI:0, KA:0, HI:0, OU:0 };
+
+      for (let r = 0; r < 9; r++) {
+        for (let c = 0; c < 9; c++) {
+          const piece = boardState[r][c];
+          if (piece && piece.type) {
+            const base = BASE_PIECE_MAP[piece.type];
+            if (base) {
+              if (counts[base] >= PIECE_MAX_LIMITS[base]) {
+                boardState[r][c] = null;
+              } else {
+                counts[base]++;
+              }
+            }
+          }
+        }
+      }
+
+      const adjustHand = (hand) => {
+        for (const [p, num] of Object.entries(hand)) {
+          const base = BASE_PIECE_MAP[p];
+          if (base) {
+            const available = PIECE_MAX_LIMITS[base] - counts[base];
+            if (available <= 0) {
+              hand[p] = 0;
+            } else if (num > available) {
+              hand[p] = available;
+              counts[base] += available;
+            } else {
+              counts[base] += num;
+            }
+          }
+        }
+      };
+
+      adjustHand(senteHand);
+      adjustHand(goteHand);
+    }
+
+    function downloadBoardImage() {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      
+      const cellSize = 50;
+      const margin = 40;
+      const handHeight = 40;
+      const width = cellSize * 9 + margin * 2;
+      const height = cellSize * 9 + margin * 2 + handHeight * 2;
+
+      canvas.width = width;
+      canvas.height = height;
+
+      // 背景
+      ctx.fillStyle = "#fef3c7";
+      ctx.fillRect(0, 0, width, height);
+
+      // 盤面
+      const boardX = margin;
+      const boardY = margin + handHeight;
+      const boardW = cellSize * 9;
+      const boardH = cellSize * 9;
+
+      ctx.fillStyle = "#fde68a";
+      ctx.fillRect(boardX, boardY, boardW, boardH);
+
+      ctx.strokeStyle = "#451a03";
+      ctx.lineWidth = 2;
+      ctx.strokeRect(boardX, boardY, boardW, boardH);
+
+      // 罫線
+      ctx.lineWidth = 1;
+      for (let i = 1; i < 9; i++) {
+        ctx.beginPath();
+        ctx.moveTo(boardX + i * cellSize, boardY);
+        ctx.lineTo(boardX + i * cellSize, boardY + boardH);
+        ctx.stroke();
+
+        ctx.beginPath();
+        ctx.moveTo(boardX, boardY + i * cellSize);
+        ctx.lineTo(boardX + boardW, boardY + i * cellSize);
+        ctx.stroke();
+      }
+
+      // 星
+      const stars = [3, 6];
+      stars.forEach(r => {
+        stars.forEach(c => {
+          ctx.beginPath();
+          ctx.arc(boardX + c * cellSize, boardY + r * cellSize, 3, 0, Math.PI * 2);
+          ctx.fillStyle = "#451a03";
+          ctx.fill();
+        });
+      });
+
+      // 筋・段
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#78350f";
+      const kanjiNums = ['一','二','三','四','五','六','七','八','九'];
+
+      for (let i = 0; i < 9; i++) {
+        ctx.fillText(9 - i, boardX + i * cellSize + cellSize / 2, boardY - 15);
+        ctx.fillText(kanjiNums[i], boardX + boardW + 15, boardY + i * cellSize + cellSize / 2);
+      }
+
+      // 持ち駒
+      ctx.font = "bold 14px sans-serif";
+      ctx.fillStyle = "#451a03";
+      ctx.textAlign = "left";
+      ctx.fillText("☖ 後手持ち駒: " + formatHandText(goteHand), margin, margin / 2 + 10);
+      ctx.fillText("☗ 先手持ち駒: " + formatHandText(senteHand), margin, height - margin / 2 - 10);
+
+      // 駒描画
+      ctx.textAlign = "center";
+      for (let row = 0; row < 9; row++) {
+        for (let col = 0; col < 9; col++) {
+          const piece = boardState[row][col];
+          if (piece) {
+            const x = boardX + col * cellSize + cellSize / 2;
+            const y = boardY + row * cellSize + cellSize / 2;
+
+            ctx.save();
+            ctx.translate(x, y);
+
+            if (piece.owner === 1) {
+              ctx.rotate(Math.PI);
+            }
+
+            ctx.font = "bold 24px serif";
+            ctx.fillStyle = "#0f172a";
+            ctx.fillText(PIECE_KANJI[piece.type] || '', 0, 2);
+
+            ctx.restore();
+          }
+        }
+      }
+
+      const link = document.createElement('a');
+      link.download = `shogi_board_${Date.now()}.png`;
+      link.href = canvas.toDataURL('image/png');
+      link.click();
+
+      showToast("局面図画像を保存しました");
+    }
+
+    function formatHandText(handObj) {
+      let parts = [];
+      for (const [p, count] of Object.entries(handObj)) {
+        if (count > 0) {
+          parts.push(`${PIECE_KANJI[p]}${count > 1 ? count : ''}`);
+        }
+      }
+      return parts.length > 0 ? parts.join(' ') : 'なし';
+    }
+
+    function showToast(message, isError = false) {
+      const toast = document.getElementById('toast');
+      const toastMsg = document.getElementById('toastMsg');
+
+      toastMsg.innerText = message;
+      if (isError) {
+        toast.classList.remove('bg-slate-800');
+        toast.classList.add('bg-red-800');
+      } else {
+        toast.classList.remove('bg-red-800');
+        toast.classList.add('bg-slate-800');
+      }
+
+      toast.classList.remove('translate-y-20', 'opacity-0');
+      toast.classList.add('translate-y-0', 'opacity-100');
+
+      setTimeout(() => {
+        toast.classList.remove('translate-y-0', 'opacity-100');
+        toast.classList.add('translate-y-20', 'opacity-0');
+      }, 4000);
+    }
+  </script>
+</body>
+</html>
